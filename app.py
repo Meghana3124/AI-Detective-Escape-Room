@@ -1,14 +1,17 @@
 
 import streamlit as st
 from google import genai
-from google.colab import userdata
+import os
 import json
 
 st.set_page_config(page_title="AI Detective", page_icon="🕵️", layout="wide")
 
 @st.cache_resource
 def get_client():
-    return genai.Client(api_key=userdata.get("GEMINI_API_KEY"))
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not configured")
+    return genai.Client(api_key=api_key)
 
 client = get_client()
 
