@@ -1,53 +1,102 @@
+
 import streamlit as st
+from google import genai
+from google.colab import userdata
+import json
 
-st.set_page_config(page_title="AI Detective Escape Room - V1", page_icon="🕵️", layout="centered")
-st.title("🕵️ The Locked Library")
-st.subheader("Version 1 — Classic Detective Escape Room")
-st.write("A valuable diamond has disappeared. Solve three puzzles to identify the thief and unlock the exit.")
+st.set_page_config(page_title="AI Detective", page_icon="🕵️", layout="wide")
 
-PUZZLES = [
-    {"title":"Puzzle 1: The muddy footprint", "story":"A muddy footprint was found beside the display case. Which suspect had been gardening in the rain?", "options":["Maya the gardener","Leo the chef","Nora the pianist"], "answer":"Maya the gardener", "hint":"Look for the suspect whose job involves soil and plants."},
-    {"title":"Puzzle 2: The broken clock", "story":"The library clock stopped at 8:15. The guard says the lights went out at 8:10. Which time is the likely time of the theft?", "options":["7:30","8:15","9:00"], "answer":"8:15", "hint":"The stopped clock records the moment it was damaged."},
-    {"title":"Puzzle 3: The final key", "story":"A note says: 'I work with plants, and my shoes were muddy.' Who took the diamond?", "options":["Maya","Leo","Nora"], "answer":"Maya", "hint":"Combine the footprint clue with the note."}
-]
+@st.cache_resource
+def get_client():
+    return genai.Client(api_key=userdata.get("GEMINI_API_KEY"))
 
-if "v1_step" not in st.session_state:
-    st.session_state.v1_step = 0
-if "v1_score" not in st.session_state:
-    st.session_state.v1_score = 0
-if "v1_done" not in st.session_state:
-    st.session_state.v1_done = set()
+client = get_client()
 
-if st.button("🔄 Restart Version 1"):
-    st.session_state.v1_step = 0
-    st.session_state.v1_score = 0
-    st.session_state.v1_done = set()
-    st.rerun()
+st.title("🕵️ AI DETECTIVE: THE MYSTERY SOLVER")
+st.subheader("Version 2 — Gemini AI Powered Escape Room")
+st.write("Investigate clues, identify the criminal and unlock the exit.")
 
-step = st.session_state.v1_step
-if step < len(PUZZLES):
-    p = PUZZLES[step]
-    st.progress(step / len(PUZZLES))
-    st.markdown(f"### {p['title']}")
-    st.write(p["story"])
-    choice = st.radio("Choose your answer:", p["options"], key=f"v1_choice_{step}")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Submit answer", type="primary"):
-            if choice == p["answer"]:
-                st.success("Correct! The evidence is added to your case file.")
-                if step not in st.session_state.v1_done:
-                    st.session_state.v1_score += 1
-                    st.session_state.v1_done.add(step)
-                st.session_state.v1_step += 1
-                st.rerun()
+if "case" not in st.session_state:
+    st.session_state.case = None
+if "solved" not in st.session_state:
+    st.session_state.solved = False
+if "score" not in st.session_state:
+    st.session_state.score = 100
+if "hints" not in st.session_state:
+    st.session_state.hints = 0
+
+difficulty = st.selectbox("Choose difficulty", ["Easy", "Medium", "Hard"])
+
+def generate_case():
+    prompt = f"""
+    Create a logical {difficulty} detective escape room.
+    Return ONLY valid JSON with:
+    title, story, suspects, clues, culprit, explanation.
+    suspects: exactly 3 objects with name and description.
+    clues: exactly 3 clues.
+    culprit: exact name of one suspect.
+    Make the evidence logically consistent and sufficient
+    to identify exactly one culprit.
+    Do not reveal the culprit in the story or clues.
+    """
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=prompt
+    )
+    result = response.text.replace("```json", "").replace("```", "").strip()
+    return json.loads(result)
+
+if st.button("🕵️ Generate New AI Mystery", type="primary"):
+    try:
+        with st.spinner("Gemini is creating your mystery..."):
+            st.session_state.case = generate_case()
+            st.session_state.solved = False
+            st.session_state.score = 100
+            st.session_state.hints = 0
+    except Exception as e:
+        st.error(f"AI generation error: {e}")
+
+if st.session_state.case:
+    case = st.session_state.case
+
+    st.header(case["title"])
+    st.write(case["story"])
+
+    st.subheader("🔍 Evidence Board")
+    for i, clue in enumerate(case["clues"], 1):
+        st.info(f"Clue {i}: {clue}")
+
+    st.subheader("👥 Suspects")
+    for suspect in case["suspects"]:
+        st.markdown(f"**{suspect['name']}** — {suspect['description']}")
+
+    if not st.session_state.solved:
+        names = [s["name"] for s in case["suspects"]]
+        choice = st.selectbox("Who is the culprit?", names)
+
+        if st.button("Submit accusation"):
+            if choice.strip().lower() == case["culprit"].strip().lower():
+                st.session_state.solved = True
+                st.balloons()
+                st.success("Correct! The escape door is unlocked!")
             else:
-                st.error("Not quite. Review the evidence and try again.")
-    with c2:
-        if st.button("Show hint"):
-            st.info(p["hint"])
-else:
-    st.balloons()
-    st.success("CASE SOLVED — EXIT UNLOCKED!")
-    st.write("Maya took the diamond. You solved the mystery and escaped the library.")
-    st.metric("Score", f"{st.session_state.v1_score}/3")
+                st.error("Incorrect! Re-examine the evidence.")
+                st.session_state.score = max(0, st.session_state.score - 10)
+
+        if st.button("💡 Ask Gemini for a hint"):
+            try:
+                hint = client.models.generate_content(
+                    model="gemini-3.8-flash",
+                    contents=f"Give one helpful but non-revealing hint for this mystery: {case['story']} Clues: {case['clues']} Suspects: {case['suspects']}. Never reveal the culprit."
+                )
+                st.session_state.hints += 1
+                st.session_state.score = max(0, st.session_state.score - 15)
+                st.info(hint.text)
+            except Exception as e:
+                st.error(f"Hint error: {e}")
+
+    else:
+        st.success("🎉 CASE SOLVED — YOU ESCAPED!")
+        st.write("Culprit:", case["culprit"])
+        st.write("Explanation:", case["explanation"])
+        st.metric("Final score", st.session_state.score)
